@@ -158,29 +158,66 @@ EOF
     read -p "按回车键返回..." _
 }
 
-# 4) 磁盘自愈模块
+# 4) 磁盘自愈模块 - [已修复]
 disk_cleanup() {
     header
     echo -e "${YELLOW}--- [模块 4] 系统临时垃圾与日志碎片智能自愈 ---${NC}"
     
-    # 使用 || true 确保即使命令解析出错也不会触发 set -e 导致脚本退出
-    local current_usage; current_usage=$(df -h / 2>/dev/null | tail -1 | awk '{print $5}' || echo "Unknown")
-    echo -e "${CYAN}当前系统根分区磁盘占用: $current_usage${NC}"
+    # 获取清理前磁盘使用情况（提取百分比数值）
+    local current_percent; current_percent=$(df -h / 2>/dev/null | tail -1 | awk '{print $5}' | sed 's/%//' || echo "Unknown")
+    local current_used; current_used=$(df -h / 2>/dev/null | tail -1 | awk '{print $3}' || echo "Unknown")
+    local current_total; current_total=$(df -h / 2>/dev/null | tail -1 | awk '{print $2}' || echo "Unknown")
+    
+    echo -e "${CYAN}清理前系统根分区磁盘占用:${NC}"
+    echo "  已用: $current_used / 总容量: $current_total （占比: ${current_percent}%）"
     
     read -p "确认执行系统深度自愈清理? (y/n): " c
     if [[ "$c" == "y" ]]; then
         echo -e "${YELLOW}正在执行深度清理...${NC}"
         
-        # 增加 || true 容错
-        rm -f "$HOME/big_test_file.img" 2>/dev/null || true
+        # 清理操作集合 - 使用 || true 确保单项清理失败不影响整体流程
+        echo -e "${CYAN}  → 清理临时文件 (/tmp)${NC}"
         rm -rf /tmp/* 2>/dev/null || true
         
-        local after_usage; after_usage=$(df -h / 2>/dev/null | tail -1 | awk '{print $5}' || echo "Unknown")
-        echo -e "${GREEN}✓ 磁盘清理完成，根分区占用已优化至: $after_usage${NC}"
+        echo -e "${CYAN}  → 清理缓存文件 (~/.cache)${NC}"
+        rm -rf ~/.cache/* 2>/dev/null || true
         
-        log_action "执行磁盘深度自愈清理，占用从 $current_usage 优化至 $after_usage"
+        echo -e "${CYAN}  → 清理测试文件${NC}"
+        rm -f "$HOME/big_test_file.img" 2>/dev/null || true
+        
+        echo -e "${CYAN}  → 清理旧的日志文件 (journalctl)${NC}"
+        journalctl --vacuum=10d 2>/dev/null || true
+        
+        echo -e "${CYAN}  → 清理包管理器缓存${NC}"
+        if command -v apt-get &>/dev/null; then
+            apt-get clean 2>/dev/null || true
+        fi
+        if command -v yum &>/dev/null; then
+            yum clean all 2>/dev/null || true
+        fi
+        
+        # 获取清理后磁盘使用情况
+        local after_percent; after_percent=$(df -h / 2>/dev/null | tail -1 | awk '{print $5}' | sed 's/%//' || echo "Unknown")
+        local after_used; after_used=$(df -h / 2>/dev/null | tail -1 | awk '{print $3}' || echo "Unknown")
+        
+        echo ""
+        echo -e "${GREEN}✓ 磁盘清理完成！${NC}"
+        echo -e "${CYAN}清理后系统根分区磁盘占用:${NC}"
+        echo "  已用: $after_used （占比: ${after_percent}%）"
+        
+        # 对比优化效果
+        if [[ "$current_percent" != "Unknown" ]] && [[ "$after_percent" != "Unknown" ]]; then
+            local diff=$((current_percent - after_percent))
+            if [ "$diff" -gt 0 ]; then
+                echo -e "${GREEN}  📊 优化效果：磁盘占用降低了 ${diff}% 🎉${NC}"
+            else
+                echo -e "${YELLOW}  📊 清理后占用基本无变化（可能已无有效清理内容）${NC}"
+            fi
+        fi
+        
+        log_action "执行磁盘深度自愈清理，占用从 ${current_percent}% 优化至 ${after_percent}%"
     else
-        echo "操作已取消。"
+        echo -e "${YELLOW}✓ 操作已取消。${NC}"
     fi
     read -p "按回车键返回主菜单..." _
 }
